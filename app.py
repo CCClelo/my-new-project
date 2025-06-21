@@ -123,26 +123,42 @@ def initialize_session_state_ui():
 
 initialize_session_state_ui() # Call it once at the start of the UI script
 
-# --- Helper function to add logs to UI and console logger ---
+# In app.py
 def add_log_ui(message: str, level: str = "info", UImodule: str = "UI"):
     console_logger_ui = logging.getLogger("AppUI") 
-    # Determine current LLM provider for log prefix, handle if not initialized
-    llm_provider_for_log = "SYS"
-    if _CORE_IMPORTED_SUCCESSFULLY and st.session_state.get('system_initialized_successfully'):
-        llm_provider_for_log = st.session_state.get('current_llm_provider', 'SYS_INIT_OK')
-    elif _CORE_IMPORTED_SUCCESSFULLY and st.session_state.get('system_initialized_attempted'):
-        llm_provider_for_log = st.session_state.get('selected_llm_provider_key', 'SYS_INIT_ATTEMPT') 
-        if llm_provider_for_log in novel_core.llm_providers_map_core: # Get actual name
-            llm_provider_for_log = novel_core.llm_providers_map_core[llm_provider_for_log]
+    
+    # --- MODIFIED LOGIC FOR llm_provider_for_log ---
+    llm_provider_for_log_val = "SYS_UNKNOWN" # A safe default string
 
-    timestamp = f"[{UImodule}][{llm_provider_for_log.upper()}] "
+    if _CORE_IMPORTED_SUCCESSFULLY and hasattr(st, 'session_state'): # Check if session_state exists
+        if st.session_state.get('system_initialized_successfully'):
+            llm_provider_for_log_val = st.session_state.get('current_llm_provider', 'SYS_INIT_OK')
+        elif st.session_state.get('system_initialized_attempted'):
+            # Get the key first, then the name from map
+            selected_key = st.session_state.get('selected_llm_provider_key')
+            if selected_key and selected_key in novel_core.llm_providers_map_core:
+                llm_provider_for_log_val = novel_core.llm_providers_map_core[selected_key]
+            else:
+                llm_provider_for_log_val = 'SYS_INIT_ATTEMPT_NO_KEY'
+        else: # Not attempted, or core not imported successfully enough to have maps
+            llm_provider_for_log_val = "SYS_PRE_INIT"
+            
+    # Ensure llm_provider_for_log_val is a string before .upper()
+    if not isinstance(llm_provider_for_log_val, str):
+        llm_provider_for_log_val = str(llm_provider_for_log_val) # Convert to string if it became None or other type
+    # --- END MODIFICATION ---
+
+    timestamp = f"[{UImodule}][{llm_provider_for_log_val.upper()}] " # Now this should be safe
     log_entry = f"{timestamp}{message}"
     
-    if not isinstance(st.session_state.get("log_messages"), list): 
+    # Ensure log_messages exists and is a list
+    if 'log_messages' not in st.session_state or not isinstance(st.session_state.log_messages, list): 
         st.session_state.log_messages = ["Log list init error in add_log_ui."]
     st.session_state.log_messages.insert(0, log_entry)
     
+    # Console logging
     if level.lower() == "info": console_logger_ui.info(message)
+    # ... (other levels) ...
     elif level.lower() == "warning": console_logger_ui.warning(message)
     elif level.lower() == "error": console_logger_ui.error(message)
     elif level.lower() == "fatal": console_logger_ui.critical(message) 
