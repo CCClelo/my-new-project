@@ -236,11 +236,11 @@ def core_retrieve_recent_story_segments(n_results: int = 1) -> List[str]:
 # Ensure helper functions like core_get_custom_proxy_key, core_set_temp_os_proxies,
 # core_restore_original_os_proxies, core_get_httpx_client_with_proxy are fully implemented.
 
-def core_generate_with_llm(provider_name: str, 
+def core_generate_with_llm(provider_name: Optional[str], # Make it Optional
                            prompt_text_from_rag: str, 
-                           temperature: float = 0.7, 
-                           max_tokens_override: Optional[int] = None, 
-                           system_message_override: Optional[str] = None) -> Optional[str]:
+                           temperature: float =0.7, 
+                           max_tokens_override: Optional[int]=None, 
+                           system_message_override: Optional[str]=None) -> Optional[str]:
     log_prefix = f"CoreLLM_{provider_name.upper()}"
     _log_to_ui_if_available(f"开始调用LLM: {provider_name}...", module_prefix=log_prefix)
     
@@ -364,7 +364,26 @@ def core_initialize_system(embedding_choice_key: str, llm_choice_key: str, api_k
         # ... (Full ST model loading into st.session_state.embedding_model_instance) ...
 
         # 2. LLM Provider Setup
-        # ... (Full logic, setting st.session_state.current_llm_provider) ...
+        log_to_ui_core_sys_init("步骤2: 设置LLM提供商...")
+        
+        # Validate LLM choice key
+        if not llm_choice_key or not isinstance(llm_choice_key, str) or llm_choice_key not in llm_providers_map_core:
+            err_msg_llm_key = f"无效的 llm_choice_key: '{llm_choice_key}'. 可用: {list(llm_providers_map_core.keys())}"
+            logger.error(err_msg_llm_key)
+            log_to_ui_core_sys_init(err_msg_llm_key, "FATAL")
+            raise ValueError(err_msg_llm_key)
+            
+        llm_provider_name = llm_providers_map_core[llm_choice_key]
+        
+        # Validate provider name from map
+        if not llm_provider_name or not isinstance(llm_provider_name, str):
+            err_msg_llm_val = f"llm_providers_map_core 中 key '{llm_choice_key}' 对应的值 ('{llm_provider_name}') 无效."
+            logger.error(err_msg_llm_val)
+            log_to_ui_core_sys_init(err_msg_llm_val, "FATAL")
+            raise ValueError(err_msg_llm_val)
+            
+        st.session_state.current_llm_provider = llm_provider_name
+        logger.info(f"Core: current_llm_provider SET in session_state to: '{st.session_state.current_llm_provider}'")
 
         # 3. API Key Checks
         # ... (Full, robust API Key check logic based on selections) ...
@@ -389,6 +408,146 @@ def core_initialize_system(embedding_choice_key: str, llm_choice_key: str, api_k
 
 
 # --- UI Specific Core Functions (called by app_ui.py) ---
+def core_generate_with_llm(provider_name: Optional[str], 
+                         prompt_text_from_rag: str,
+                         temperature: float = 0.7,
+                         max_tokens_override: Optional[int] = None,
+                         system_message_override: Optional[str] = None) -> Optional[str]:
+    if not provider_name or not isinstance(provider_name, str):
+        logger.error(f"CoreLLM CRITICAL: provider_name is invalid or None: '{provider_name}'")
+        return "错误：LLM提供商名称无效或未设置。"
+    
+    log_prefix = f"CoreLLM_{provider_name.upper()}"
+    _log_to_ui_if_available(f"开始调用LLM: {provider_name}...", module_prefix=log_prefix)
+
+    # Default system message if not overridden
+    final_system_message = system_message_override or """
+    你是一位专业的小说创作助手，擅长根据用户指令和上下文创作高质量的小说内容。
+    请严格遵循以下规则：
+    1. 保持角色性格和世界观一致性
+    2. 自然承接前文情节
+    3. 直接输出小说正文，不要添加解释或注释
+    """
+
+    try:
+        if provider_name == "openai_official":
+            api_key = st.session_state.get('api_keys', {}).get(OPENAI_API_KEY_ENV_NAME, OPENAI_API_KEY_CORE)
+            if not api_key:
+                raise ValueError("OpenAI API Key未配置")
+            
+            client = openai.OpenAI(
+                api_key=api_key,
+                http_client=core_get_httpx_client_with_proxy(
+                    OPENAI_OFFICIAL_HTTP_PROXY_CORE,
+                    OPENAI_OFFICIAL_HTTPS_PROXY_CORE
+                )
+            )
+            
+            response = client.chat.completions.create(
+                model=OPENAI_LLM_MODEL_CORE,
+                messages=[
+                    {"role": "system", "content": final_system_message},
+                    {"role": "user", "content": prompt_text_from_rag}
+                ],
+                temperature=temperature,
+                max_tokens=max_tokens_override or 2000
+            )
+            return response.choices[0].message.content
+
+        elif provider_name == "deepseek":
+            # Similar implementation for DeepSeek
+            return "DeepSeek实现待完成"
+
+        elif provider_name == "gemini":
+            api_key = st.session_state.get('api_keys', {}).get(GEMINI_API_KEY_ENV_NAME, GEMINI_API_KEY_CORE)
+            if not api_key:
+                raise ValueError("Gemini API Key未配置")
+
+            # Check if client needs re-initialization
+            gemini_client = st.session_state.get('gemini_llm_client_core')
+            if not gemini_client or st.session_state.get('current_gemini_client_provider_details') != provider_name:
+                # Configure Gemini SDK if not already done
+                if not st.session_state.get('gemini_configured_core_sdk_v2', False):
+                    logger.info(f"{log_prefix}: Configuring Gemini SDK with API key")
+                    genai.configure(
+                        api_key=api_key,
+                        client_options={
+                            'api_endpoint': os.getenv("GEMINI_API_ENDPOINT", "https://generativelanguage.googleapis.com/v1beta")
+                        }
+                    )
+                    st.session_state.gemini_configured_core_sdk_v2 = True
+                
+                # Initialize new client
+                logger.info(f"{log_prefix}: Initializing Gemini GenerativeModel for {GEMINI_LLM_MODEL_CORE}")
+                gemini_client = genai.GenerativeModel(
+                    GEMINI_LLM_MODEL_CORE,
+                    generation_config=genai.types.GenerationConfig(
+                        max_output_tokens=max_tokens_override or 2000,
+                        temperature=temperature
+                    )
+                )
+                st.session_state.gemini_llm_client_core = gemini_client
+                st.session_state.current_gemini_client_provider_details = provider_name
+            
+            # Prepare prompt with system message
+            prompt_with_sys_msg = f"{final_system_message}\n\n---\n\n{prompt_text_from_rag}"
+            
+            # Configure safety settings
+            safety_settings = [
+                {"category": "HARM_CATEGORY_HARASSMENT", "threshold": "BLOCK_NONE"},
+                {"category": "HARM_CATEGORY_HATE_SPEECH", "threshold": "BLOCK_NONE"},
+                {"category": "HARM_CATEGORY_SEXUALLY_EXPLICIT", "threshold": "BLOCK_NONE"},
+                {"category": "HARM_CATEGORY_DANGEROUS_CONTENT", "threshold": "BLOCK_NONE"}
+            ]
+            
+            logger.info(f"{log_prefix}: Sending prompt to Gemini (length: {len(prompt_with_sys_msg)})")
+            _log_to_ui_if_available("正在调用Gemini API...", "DEBUG", log_prefix)
+            
+            try:
+                response = gemini_client.generate_content(
+                    prompt_with_sys_msg,
+                    safety_settings=safety_settings,
+                    generation_config={
+                        'temperature': temperature,
+                        'max_output_tokens': max_tokens_override or 2000
+                    }
+                )
+                
+                # Process response
+                if response.prompt_feedback and response.prompt_feedback.block_reason:
+                    block_reason = response.prompt_feedback.block_reason
+                    logger.warning(f"{log_prefix}: Gemini Prompt Blocked: {block_reason}")
+                    _log_to_ui_if_available(f"Gemini内容被阻止: {block_reason}", "ERROR", log_prefix)
+                    return f"错误：Gemini内容由于'{block_reason}'而被阻止。"
+                
+                if response.candidates and response.candidates[0].content and response.candidates[0].content.parts:
+                    generated_text = "".join(part.text for part in response.candidates[0].content.parts).strip()
+                    if not generated_text:
+                        logger.warning(f"{log_prefix}: Gemini parts joined to empty string")
+                        return "Gemini返回了空内容"
+                    return generated_text
+                
+                logger.warning(f"{log_prefix}: Gemini returned no parsable content")
+                return "Gemini未能返回有效内容"
+                
+            except Exception as e:
+                logger.error(f"{log_prefix}: Gemini调用失败: {e}", exc_info=True)
+                _log_to_ui_if_available(f"Gemini调用失败: {e}", "ERROR", log_prefix)
+                return f"Gemini生成错误: {str(e)[:200]}"
+
+        elif provider_name == "custom_proxy_llm":
+            # Similar implementation for custom proxy
+            return "Custom Proxy实现待完成"
+
+        else:
+            logger.error(f"未知的LLM提供商: {provider_name}")
+            return f"错误：不支持的LLM提供商 '{provider_name}'"
+
+    except Exception as e:
+        logger.error(f"{log_prefix}: LLM调用失败: {e}", exc_info=True)
+        _log_to_ui_if_available(f"LLM调用失败: {e}", "ERROR", log_prefix)
+        return f"LLM生成错误: {str(e)[:200]}"
+
 def core_generate_segment_text_for_ui(user_directive: str) -> Optional[str]:
     if not st.session_state.get('system_initialized_successfully', False): return "错误: 系统未初始化。"
     # TODO: Implement your full RAG logic:
@@ -444,9 +603,17 @@ def core_generate_segment_text_for_ui(user_directive: str) -> Optional[str]:
         _log_to_ui_if_available(f"构建的最终Prompt长度: {len(final_prompt_for_llm)} chars.", "DEBUG", log_prefix)
         logger.debug(f"Final prompt for LLM (first 300 chars):\n{final_prompt_for_llm[:300]}")
 
-        # 5. Call LLM
-        generated_text = core_generate_with_llm( # Assumes this is fully implemented
-            st.session_state.current_llm_provider,
+        # 5. Validate LLM provider before calling
+        current_llm_provider_from_state = st.session_state.get('current_llm_provider')
+        if not current_llm_provider_from_state or not isinstance(current_llm_provider_from_state, str):
+            err_msg_llm_missing = "错误 (CoreRAG): current_llm_provider 未在session_state中正确设置，无法调用LLM。"
+            logger.error(err_msg_llm_missing)
+            _log_to_ui_if_available(err_msg_llm_missing, "ERROR", log_prefix)
+            return err_msg_llm_missing
+
+        # 6. Call LLM with validated provider
+        generated_text = core_generate_with_llm(
+            current_llm_provider_from_state,
             final_prompt_for_llm,
             temperature=st.session_state.get('llm_temperature', 0.7),
             max_tokens_override=st.session_state.get('max_tokens_per_llm_call')
