@@ -1,11 +1,11 @@
 streamlit
-openai>=1.0.0  # 或者您代码兼容的特定版本
+python-dotenv
+pymilvus>=2.4.0 
+openai>=1.3.0  # 例如，确保是v1.x.x版本，因为您的代码是基于此
 sentence-transformers
 torch
 transformers
-pymilvus>=2.4.0
 google-generativeai
 google-api-core
 httpx
-python-dotenv 
-# ... 其他依赖 ...
+# 其他您项目明确需要的依赖
