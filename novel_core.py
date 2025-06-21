@@ -1,6 +1,5 @@
 # novel_core.py
 from typing import Dict, Optional, List
-
 import logging
 import os
 import uuid
@@ -176,7 +175,60 @@ def core_chunk_text_by_paragraph(text: str) -> List[str]:
 # --- MILVUS FUNCTIONS ---
 def _create_or_get_collection(collection_name: str, schema_fields: List[FieldSchema], description: str) -> Collection:
     """创建或获取Milvus集合"""
+    log_helper = lambda msg, lvl="INFO": _log_to_ui_if_available(msg, lvl, f"CollHelper_{collection_name[:10]}")
+    log_helper(f"开始处理集合 '{collection_name}'...")
+    
     try:
+        # 检查集合是否存在
+        if utility.has_collection(collection_name, using=MILVUS_ALIAS_CORE):
+            log_helper(f"集合 '{collection_name}' 已存在，正在获取...")
+            collection = Collection(collection_name, using=MILVUS_ALIAS_CORE)
+            log_helper(f"成功获取集合 '{collection_name}'")
+            return collection
+        
+        log_helper(f"集合 '{collection_name}' 不存在，正在创建...")
+        
+        # 验证schema
+        if not schema_fields:
+            error_msg = f"创建集合 '{collection_name}' 时schema不能为空"
+            log_helper(error_msg, "ERROR")
+            raise ValueError(error_msg)
+            
+        # 创建schema和集合
+        schema = CollectionSchema(
+            fields=schema_fields,
+            description=description,
+            enable_dynamic_field=True
+        )
+        collection = Collection(
+            name=collection_name,
+            schema=schema,
+            using=MILVUS_ALIAS_CORE
+        )
+        log_helper(f"集合 '{collection_name}' 创建成功")
+        
+        # 创建索引
+        index_params = {
+            "metric_type": "L2",
+            "index_type": "HNSW",
+            "params": {"M": 32, "efConstruction": 256}
+        }
+        log_helper(f"为集合 '{collection_name}' 创建索引...")
+        collection.create_index(
+            field_name="embedding",
+            index_params=index_params,
+            index_name=f"idx_{collection_name}",
+            timeout=180,
+            using=MILVUS_ALIAS_CORE
+        )
+        log_helper(f"集合 '{collection_name}' 索引创建成功")
+        
+        # 加载集合
+        log_helper(f"加载集合 '{collection_name}' 到内存...")
+        collection.load(timeout=180, using=MILVUS_ALIAS_CORE)
+        log_helper(f"集合 '{collection_name}' 加载完成")
+        
+        return collection
         if utility.has_collection(collection_name):
             _log_to_ui_if_available(f"集合 {collection_name} 已存在，直接获取", "DEBUG", "CoreMilvus")
             return Collection(collection_name)
@@ -330,20 +382,115 @@ def core_load_and_vectorize_settings():
     _log_to_ui_if_available(f"设定文件加载完成。处理 {files_processed} 文件，共添加 {chunks_added_total} 片段。", "INFO", log_prefix)
 
 def core_init_milvus_collections_internal():
-    # ... (PASTE THE FULL, CORRECTED ZILLIZ-AWARE core_init_milvus_collections_internal from the PREVIOUS RESPONSE HERE)
-    # This function is critical and must correctly:
-    # 1. Check prerequisites from st.session_state (embedding_dimension, selected_embedding_provider_identifier).
-    # 2. Establish Milvus connection (Zilliz Cloud or Local).
-    # 3. Define collection names (lore_col_name, story_col_name).
-    # 4. Define schemas (lore_schema_list, story_schema_list with all FieldSchema objects).
-    # 5. Define and use the _create_or_get_collection helper.
-    # 6. Assign actual pymilvus.Collection objects to st.session_state.lore_collection_milvus_obj and story_collection_milvus_obj.
-    # 7. Set st.session_state.milvus_initialized_core = True on success.
-    _log_to_ui_if_available("Milvus集合初始化 (核心逻辑待您从之前正确的版本粘贴替换)...", "WARNING", "CoreInitMilvus")
     """初始化Milvus集合"""
     log_prefix = "CoreInitMilvus"
-    
+    log_to_ui_milvus = lambda msg, lvl="INFO": _log_to_ui_if_available(msg, lvl, log_prefix)
+    logger.info("Core: core_init_milvus_collections_internal called for ACTUAL collection setup.")
+    log_to_ui_milvus("开始实际的Milvus集合初始化...")
+
     try:
+        # 检查前置条件
+        if 'embedding_dimension' not in st.session_state:
+            raise ValueError("embedding_dimension 未在session_state中设置")
+            
+        embedding_dim = st.session_state.embedding_dimension
+        provider_id = st.session_state.selected_embedding_provider_identifier
+        
+        # 建立连接
+        zilliz_uri_from_env = os.getenv(ZILLIZ_CLOUD_URI_ENV_NAME)
+        zilliz_token_from_env = os.getenv(ZILLIZ_CLOUD_TOKEN_ENV_NAME)
+
+        # 添加调试日志
+        logger.info(f"DEBUG MilvusConnect: Read ZILLIZ_CLOUD_URI from env: '{zilliz_uri_from_env}'")
+        token_present_for_log = "IS SET and NOT EMPTY" if zilliz_token_from_env and zilliz_token_from_env.strip() else "IS NOT SET or EMPTY"
+        logger.info(f"DEBUG MilvusConnect: Read ZILLIZ_CLOUD_TOKEN from env: Status is '{token_present_for_log}'")
+        if zilliz_token_from_env:
+            logger.info(f"DEBUG MilvusConnect: ZILLIZ_CLOUD_TOKEN (first 5 chars if set): '{str(zilliz_token_from_env)[:5]}...'")
+        
+        log_to_ui_milvus(f"Env Check: URI='{zilliz_uri_from_env}', Token Status='{token_present_for_log}'")
+
+        alias_to_use_in_connect = MILVUS_ALIAS_CORE
+        try:
+            if connections.has_connection(alias_to_use_in_connect):
+                connections.remove_connection(alias_to_use_in_connect)
+
+            # 改进的Zilliz Cloud连接条件判断
+            use_zilliz = (
+                zilliz_uri_from_env and zilliz_uri_from_env.strip() and 
+                zilliz_token_from_env and zilliz_token_from_env.strip() and
+                zilliz_uri_from_env != "your_zilliz_cluster_uri_from_screenshot" and
+                zilliz_token_from_env != "YOUR_ACTUAL_ZILLIZ_CLOUD_TOKEN_HERE"
+            )
+            logger.info(f"DEBUG MilvusConnect: Condition to use Zilliz Cloud is: {use_zilliz}")
+
+            if use_zilliz: 
+                logger.info(f"Core: Attempting Zilliz Cloud connection with URI: {zilliz_uri_from_env}")
+                connections.connect(alias=alias_to_use_in_connect, uri=zilliz_uri_from_env, token=zilliz_token_from_env, timeout=30.0)
+                st.session_state.milvus_target = "Zilliz Cloud"
+            else:
+                logger.info(f"Core: Zilliz Cloud config incomplete, placeholder, or not set. Attempting local Milvus: {MILVUS_HOST_CORE}:{MILVUS_PORT_CORE}")
+                connections.connect(alias=alias_to_use_in_connect, host=MILVUS_HOST_CORE, port=MILVUS_PORT_CORE, timeout=10.0)
+                st.session_state.milvus_target = "Local"
+            
+            logger.info(f"Core: Milvus connected (Target: {st.session_state.get('milvus_target', '未知')}).")
+            log_to_ui_milvus(f"Milvus连接成功 (目标: {st.session_state.get('milvus_target', '未知')}).", "SUCCESS")
+        except Exception as e:
+            logger.error(f"Core: Milvus连接失败 during connect(): {e}", exc_info=True)
+            log_to_ui_milvus(f"Milvus连接失败: {e}", "ERROR")
+            raise 
+
+        # 定义集合名称
+        lore_col_name = f"{COLLECTION_NAME_LORE_PREFIX_CORE}_{provider_id}_{embedding_dim}d"
+        story_col_name = f"{COLLECTION_NAME_STORY_PREFIX_CORE}_{provider_id}_{embedding_dim}d"
+        
+        # 定义schema
+        lore_schema_list = [
+            FieldSchema(name="doc_id", dtype=DataType.VARCHAR, is_primary=True, max_length=64),
+            FieldSchema(name="embedding", dtype=DataType.FLOAT_VECTOR, dim=embedding_dim),
+            FieldSchema(name="text_content", dtype=DataType.VARCHAR, max_length=65535),
+            FieldSchema(name="timestamp", dtype=DataType.VARCHAR, max_length=64),
+            FieldSchema(name="source_file", dtype=DataType.VARCHAR, max_length=255),
+            FieldSchema(name="document_type", dtype=DataType.VARCHAR, max_length=64)
+        ]
+        
+        story_schema_list = [
+            FieldSchema(name="doc_id", dtype=DataType.VARCHAR, is_primary=True, max_length=64),
+            FieldSchema(name="embedding", dtype=DataType.FLOAT_VECTOR, dim=embedding_dim),
+            FieldSchema(name="text_content", dtype=DataType.VARCHAR, max_length=65535),
+            FieldSchema(name="chapter", dtype=DataType.INT64),
+            FieldSchema(name="segment_number", dtype=DataType.INT64),
+            FieldSchema(name="timestamp", dtype=DataType.VARCHAR, max_length=64),
+            FieldSchema(name="user_directive", dtype=DataType.VARCHAR, max_length=2048)
+        ]
+        
+        # 创建/获取集合
+        log_to_ui_milvus("开始获取/创建Lore Collection...")
+        st.session_state.lore_collection_milvus_obj = _create_or_get_collection(
+            lore_col_name,
+            lore_schema_list,
+            "Novel Lore Knowledge Collection"
+        )
+        st.session_state.lore_collection_name = lore_col_name
+        log_to_ui_milvus("Lore Collection准备就绪")
+        
+        log_to_ui_milvus("开始获取/创建Story Collection...")
+        st.session_state.story_collection_milvus_obj = _create_or_get_collection(
+            story_col_name,
+            story_schema_list,
+            "Novel Story Segments Collection"
+        )
+        st.session_state.story_collection_name = story_col_name
+        log_to_ui_milvus("Story Collection准备就绪")
+        
+        st.session_state.milvus_initialized_core = True
+        logger.info(f"Milvus collections '{lore_col_name}' and '{story_col_name}' are fully ready")
+        log_to_ui_milvus("所有Milvus集合准备就绪", "SUCCESS")
+        
+    except Exception as e:
+        st.session_state.milvus_initialized_core = False
+        logger.error(f"初始化Milvus集合失败: {e}", exc_info=True)
+        log_to_ui_milvus(f"初始化Milvus集合失败: {e}", "ERROR")
+        raise
         # 检查前置条件
         if 'embedding_dimension' not in st.session_state:
             raise ValueError("embedding_dimension 未在session_state中设置")
