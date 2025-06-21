@@ -302,12 +302,68 @@ def core_generate_segment_text_for_ui(user_directive: str) -> Optional[str]:
     _log_to_ui_if_available(f"UI请求生成片段 (核心逻辑待填充). 指令: {user_directive[:30]}...", module_prefix="CoreUIFace")
     return f"模拟UI片段生成，指令：{user_directive[:50]}" # Placeholder
 
-def core_adopt_segment_from_ui(text_content: str, chapter: int, segment_num: int, user_directive_snippet: str):
-    if not st.session_state.get('system_initialized_successfully', False): return False
-    _log_to_ui_if_available(f"UI采纳片段 Ch{chapter}-Seg{segment_num} (核心逻辑待填充).", module_prefix="CoreUIFace")
-    # TODO: Implement your full adoption logic:
-    # 1. Save to Markdown (using st.session_state.novel_md_output_dir_ui or NOVEL_MD_OUTPUT_DIR_CORE)
-    # 2. Get vector (using core_get_openai_embeddings or core_get_st_embeddings)
-    # 3. Add to Milvus story collection (using core_add_story_segment_to_milvus)
-    st.session_state.last_adopted_segment_text = f"[Ch{chapter}-Seg{segment_num}]\n{text_content}"
-    return True
+# In novel_core.py
+def core_generate_segment_text_for_ui(user_directive: str) -> Optional[str]:
+    log_prefix = "CoreGenerateUI"
+    _log_to_ui_if_available(f"UI请求生成片段. 指令: {user_directive[:30]}...", module_prefix=log_prefix)
+
+    if not st.session_state.get('system_initialized_successfully', False):
+        _log_to_ui_if_available("错误: 系统未初始化，无法生成片段。", "ERROR", log_prefix)
+        return "错误: 系统未初始化。"
+
+    try:
+        # 1. Retrieve relevant lore
+        # Use a query derived from the user directive
+        lore_query = f"与以下写作指令相关的核心设定、人物背景或世界观信息：'{user_directive[:100]}...'"
+        retrieved_lore_list = core_retrieve_relevant_lore(lore_query, n_results=st.session_state.get('num_lore_results_ui', 3)) # Get n_results from session_state if configurable
+        retrieved_lore_text = "\n\n---\n\n".join(retrieved_lore_list) if retrieved_lore_list else "当前指令无特定相关的背景知识补充。"
+        _log_to_ui_if_available(f"检索到 {len(retrieved_lore_list)} 条知识片段。", "DEBUG", log_prefix)
+
+        # 2. Retrieve recent story segments
+        num_recent_segments = st.session_state.get('num_recent_segments_to_fetch_ui', 2)
+        recent_segments_data = core_retrieve_recent_story_segments(n_results=num_recent_segments)
+        recent_story_text = "\n\n---\n\n".join(reversed(recent_segments_data)) if recent_segments_data and recent_segments_data[0] != "这是故事的开端，尚无先前的故事片段。" else "这是故事的开端。"
+        _log_to_ui_if_available(f"检索到 {len(recent_segments_data) if recent_segments_data and recent_segments_data[0] != '这是故事的开端，尚无先前的故事片段。' else 0} 条最近故事片段。", "DEBUG", log_prefix)
+        
+        # 3. Build contextual emotional bridge (from your original logic)
+        contextual_emotional_bridge = ""
+        # TODO: Implement your contextual_emotional_bridge logic here if needed, based on recent_story_text and user_directive
+        # Example:
+        # if "退婚" in recent_story_text: contextual_emotional_bridge = "**重要情境回顾**: 主角刚被退婚..."
+
+        # 4. Construct the final prompt
+        # This structure should match what your LLM expects and what worked in novel_writing_assistant.py
+        prompt_parts = [
+            f"写作风格参考：请以引人入胜的中文网络小说风格创作。目标是生成一段详细、连贯且符合后续情节发展的内容。如果用户要求章节名，请在生成内容的最开始以 '## 章节名：XXX' 的格式给出。", # System-like instruction
+            "---参考背景知识与设定（与当前场景指令相关）---", retrieved_lore_text,
+            "---必须严格承接的先前故事情节（如果存在）---", recent_story_text,
+            (contextual_emotional_bridge if contextual_emotional_bridge else ""),
+            "---当前核心写作任务 (请严格从“先前故事情节”结尾处继续，并高度重视任何“情境回顾与情感指引”中的信息，以确保情节和情感的无缝衔接。请全力完成用户的具体写作指令。如果用户指令中包含对章节名、爽点、钩子、情感线、篇幅引导等创作要求，请尽力满足。)---",
+            f"用户具体写作指令如下：\n{user_directive}",
+            "---请基于以上所有信息，直接开始撰写故事正文（不要重复指令或做额外解释）：---"
+        ]
+        final_prompt_for_llm = "\n\n".join(filter(None, prompt_parts))
+        
+        _log_to_ui_if_available(f"构建的最终Prompt长度: {len(final_prompt_for_llm)} chars.", "DEBUG", log_prefix)
+        # For very long prompts, consider logging only a snippet
+        # logger.debug(f"Final prompt for LLM (first 500 chars):\n{final_prompt_for_llm[:500]}")
+
+        # 5. Call LLM
+        generated_text = core_generate_with_llm(
+            st.session_state.current_llm_provider,
+            final_prompt_for_llm,
+            temperature=st.session_state.get('llm_temperature', 0.7),
+            max_tokens_override=st.session_state.get('max_tokens_per_llm_call')
+            # system_message_override can be used if core_generate_with_llm supports it differently than prepending
+        )
+        
+        if generated_text:
+            _log_to_ui_if_available(f"LLM成功生成文本，长度: {len(generated_text)}。", "INFO", log_prefix)
+        else:
+            _log_to_ui_if_available("LLM未能生成文本或返回空内容。", "WARNING", log_prefix)
+        return generated_text
+
+    except Exception as e:
+        logger.error(f"{log_prefix}: 生成片段时发生错误: {e}", exc_info=True)
+        _log_to_ui_if_available(f"生成片段错误: {e}", "ERROR", log_prefix)
+        return f"生成片段时发生内部错误: {str(e)[:200]}..."
