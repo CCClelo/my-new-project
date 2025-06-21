@@ -459,23 +459,48 @@ def core_generate_with_llm(provider_name: Optional[str],
             return "DeepSeek实现待完成"
 
         elif provider_name == "gemini":
-            api_key = st.session_state.get('api_keys', {}).get(GEMINI_API_KEY_ENV_NAME, GEMINI_API_KEY_CORE)
+            # Get API key from session state or environment
+            api_key = st.session_state.get('api_keys', {}).get(GEMINI_API_KEY_ENV_NAME, os.getenv(GEMINI_API_KEY_ENV_NAME))
             if not api_key:
                 raise ValueError("Gemini API Key未配置")
+
+            # Set and log proxies
+            http_proxy_to_set, https_proxy_to_set = GEMINI_HTTP_PROXY_CORE, GEMINI_HTTPS_PROXY_CORE
+            logger.info(f"{log_prefix}: 正在设置系统代理: HTTP='{http_proxy_to_set}', HTTPS='{https_proxy_to_set}'")
+            core_set_temp_os_proxies(http_proxy_to_set, https_proxy_to_set)
+            
+            # Debug log actual proxy values
+            logger.debug(f"{log_prefix}: 当前系统代理设置: HTTP_PROXY='{os.environ.get('HTTP_PROXY')}', HTTPS_PROXY='{os.environ.get('HTTPS_PROXY')}'")
+            _log_to_ui_if_available(
+                f"Gemini调用前代理设置: HTTP='{os.environ.get('HTTP_PROXY')}', HTTPS='{os.environ.get('HTTPS_PROXY')}'",
+                "DEBUG",
+                log_prefix
+            )
 
             # Check if client needs re-initialization
             gemini_client = st.session_state.get('gemini_llm_client_core')
             if not gemini_client or st.session_state.get('current_gemini_client_provider_details') != provider_name:
                 # Configure Gemini SDK if not already done
                 if not st.session_state.get('gemini_configured_core_sdk_v2', False):
-                    logger.info(f"{log_prefix}: Configuring Gemini SDK with API key")
-                    genai.configure(
-                        api_key=api_key,
-                        client_options={
-                            'api_endpoint': os.getenv("GEMINI_API_ENDPOINT", "https://generativelanguage.googleapis.com/v1beta")
-                        }
-                    )
-                    st.session_state.gemini_configured_core_sdk_v2 = True
+                    logger.info(f"{log_prefix}: Configuring Gemini SDK")
+                    
+                    # Prepare client options
+                    client_options = None
+                    api_endpoint = os.getenv("GEMINI_API_ENDPOINT")  # e.g. for Vertex AI
+                    if api_endpoint:
+                        client_options = {"api_endpoint": api_endpoint}
+                        logger.debug(f"{log_prefix}: Using custom API endpoint: {api_endpoint}")
+
+                    try:
+                        genai.configure(
+                            api_key=api_key,
+                            client_options=client_options
+                        )
+                        st.session_state.gemini_configured_core_sdk_v2 = True
+                        logger.info(f"{log_prefix}: Gemini SDK configured successfully")
+                    except Exception as config_error:
+                        logger.error(f"{log_prefix}: Gemini SDK配置失败: {config_error}", exc_info=True)
+                        raise ValueError(f"Gemini SDK配置失败: {config_error}")
                 
                 # Initialize new client
                 logger.info(f"{log_prefix}: Initializing Gemini GenerativeModel for {GEMINI_LLM_MODEL_CORE}")

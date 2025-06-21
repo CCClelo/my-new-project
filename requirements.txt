@@ -5,7 +5,8 @@ openai>=1.0.0
 sentence-transformers>=2.2.0
 torch
 transformers
-google-generativeai>=0.3.0 
-google-api-core
+google-generativeai==0.3.2
+google-api-core==2.15.0
+grpcio==1.62.0
 httpx
 # Add any other direct dependencies your project has
