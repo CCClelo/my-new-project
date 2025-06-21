@@ -174,6 +174,42 @@ def core_chunk_text_by_paragraph(text: str) -> List[str]:
     return [p.strip() for p in text.replace('\r\n', '\n').replace('\r', '\n').split('\n\n') if p.strip()]
 
 # --- MILVUS FUNCTIONS ---
+def _create_or_get_collection(collection_name: str, schema_fields: List[FieldSchema], description: str) -> Collection:
+    """创建或获取Milvus集合"""
+    try:
+        if utility.has_collection(collection_name):
+            _log_to_ui_if_available(f"集合 {collection_name} 已存在，直接获取", "DEBUG", "CoreMilvus")
+            return Collection(collection_name)
+        
+        _log_to_ui_if_available(f"创建新集合: {collection_name}", "INFO", "CoreMilvus")
+        schema = CollectionSchema(
+            fields=schema_fields,
+            description=description,
+            enable_dynamic_field=True
+        )
+        
+        collection = Collection(
+            name=collection_name,
+            schema=schema,
+            using=MILVUS_ALIAS_CORE
+        )
+        
+        # 创建索引
+        index_params = {
+            "index_type": "IVF_FLAT",
+            "metric_type": "L2",
+            "params": {"nlist": 1024}
+        }
+        collection.create_index(
+            field_name="embedding",
+            index_params=index_params
+        )
+        
+        return collection
+    except Exception as e:
+        logger.error(f"创建/获取集合 {collection_name} 失败: {e}", exc_info=True)
+        raise
+
 def core_load_and_vectorize_settings():
     """加载并向量化设定文件到Milvus知识库"""
     log_prefix = "CoreLoadSettings"
@@ -304,13 +340,77 @@ def core_init_milvus_collections_internal():
     # 6. Assign actual pymilvus.Collection objects to st.session_state.lore_collection_milvus_obj and story_collection_milvus_obj.
     # 7. Set st.session_state.milvus_initialized_core = True on success.
     _log_to_ui_if_available("Milvus集合初始化 (核心逻辑待您从之前正确的版本粘贴替换)...", "WARNING", "CoreInitMilvus")
-    # For now, to make it runnable, a very basic mock that sets the session state vars:
-    st.session_state.lore_collection_milvus_obj = "NEEDS_ACTUAL_LORE_COLLECTION_OBJECT"
-    st.session_state.story_collection_milvus_obj = "NEEDS_ACTUAL_STORY_COLLECTION_OBJECT"
-    st.session_state.lore_collection_name = "temp_lore_name_needs_actual_init"
-    st.session_state.story_collection_name = "temp_story_name_needs_actual_init"
-    st.session_state.milvus_initialized_core = True # Assume success for mock
-    _log_to_ui_if_available("Milvus集合准备就绪 (模拟)。", "SUCCESS", "CoreInitMilvus")
+    """初始化Milvus集合"""
+    log_prefix = "CoreInitMilvus"
+    
+    try:
+        # 检查前置条件
+        if 'embedding_dimension' not in st.session_state:
+            raise ValueError("embedding_dimension 未在session_state中设置")
+            
+        embedding_dim = st.session_state.embedding_dimension
+        provider_id = st.session_state.selected_embedding_provider_identifier
+        
+        # 建立连接
+        _log_to_ui_if_available("正在连接Milvus...", module_prefix=log_prefix)
+        connections.connect(
+            alias=MILVUS_ALIAS_CORE,
+            host=MILVUS_HOST_CORE,
+            port=MILVUS_PORT_CORE
+        )
+        
+        # 定义集合名称
+        lore_col_name = f"{COLLECTION_NAME_LORE_PREFIX_CORE}_{provider_id}_{embedding_dim}d"
+        story_col_name = f"{COLLECTION_NAME_STORY_PREFIX_CORE}_{provider_id}_{embedding_dim}d"
+        
+        # 定义schema
+        lore_schema_list = [
+            FieldSchema(name="doc_id", dtype=DataType.VARCHAR, is_primary=True, max_length=64),
+            FieldSchema(name="embedding", dtype=DataType.FLOAT_VECTOR, dim=embedding_dim),
+            FieldSchema(name="text_content", dtype=DataType.VARCHAR, max_length=65535),
+            FieldSchema(name="timestamp", dtype=DataType.VARCHAR, max_length=64),
+            FieldSchema(name="source_file", dtype=DataType.VARCHAR, max_length=255),
+            FieldSchema(name="document_type", dtype=DataType.VARCHAR, max_length=64)
+        ]
+        
+        story_schema_list = [
+            FieldSchema(name="doc_id", dtype=DataType.VARCHAR, is_primary=True, max_length=64),
+            FieldSchema(name="embedding", dtype=DataType.FLOAT_VECTOR, dim=embedding_dim),
+            FieldSchema(name="text_content", dtype=DataType.VARCHAR, max_length=65535),
+            FieldSchema(name="chapter", dtype=DataType.INT64),
+            FieldSchema(name="segment_number", dtype=DataType.INT64),
+            FieldSchema(name="timestamp", dtype=DataType.VARCHAR, max_length=64),
+            FieldSchema(name="user_directive", dtype=DataType.VARCHAR, max_length=2048)
+        ]
+        
+        # 创建/获取集合
+        _log_to_ui_if_available("开始获取/创建Lore Collection...", module_prefix=log_prefix)
+        st.session_state.lore_collection_milvus_obj = _create_or_get_collection(
+            lore_col_name,
+            lore_schema_list,
+            "Novel Lore Knowledge Collection"
+        )
+        st.session_state.lore_collection_name = lore_col_name
+        _log_to_ui_if_available("Lore Collection准备就绪", module_prefix=log_prefix)
+        
+        _log_to_ui_if_available("开始获取/创建Story Collection...", module_prefix=log_prefix)
+        st.session_state.story_collection_milvus_obj = _create_or_get_collection(
+            story_col_name,
+            story_schema_list,
+            "Novel Story Segments Collection"
+        )
+        st.session_state.story_collection_name = story_col_name
+        _log_to_ui_if_available("Story Collection准备就绪", module_prefix=log_prefix)
+        
+        st.session_state.milvus_initialized_core = True
+        logger.info(f"Milvus collections '{lore_col_name}' and '{story_col_name}' are fully ready")
+        _log_to_ui_if_available("所有Milvus集合准备就绪", "SUCCESS", log_prefix)
+        
+    except Exception as e:
+        st.session_state.milvus_initialized_core = False
+        logger.error(f"初始化Milvus集合失败: {e}", exc_info=True)
+        _log_to_ui_if_available(f"初始化Milvus集合失败: {e}", "ERROR", log_prefix)
+        raise
 
 def core_load_and_vectorize_settings():
     # ... (PASTE YOUR FULL IMPLEMENTATION from the previous response ("Step 2: Populate..."))
