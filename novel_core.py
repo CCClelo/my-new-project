@@ -229,22 +229,119 @@ def core_retrieve_recent_story_segments(n_results: int = 1) -> List[str]:
     return [st.session_state.get("last_adopted_segment_text", "这是故事的开端（模拟）。")] # Placeholder
 
 # --- LLM Generation Function ---
-def core_generate_with_llm(provider_name: str, prompt_text_from_rag: str, temperature: float =0.7, max_tokens_override: Optional[int]=None, system_message_override: Optional[str]=None):
-    # --- PASTE YOUR FULL, WORKING LLM GENERATION LOGIC FROM novel_writing_assistant.py HERE ---
-    # This is a large and critical function. It needs to handle:
-    # - API key retrieval (from st.session_state.api_keys or os.getenv, using constants like OPENAI_API_KEY_CORE)
-    # - Proxy setup (using core_set_temp_os_proxies, core_restore_original_os_proxies, and proxy constants)
-    # - Client initialization (OpenAI, Gemini using genai, DeepSeek, Custom Proxy)
-    #   - For OpenAI-compatible, use st.session_state.llm_client to store/reuse client.
-    #   - For Gemini, use st.session_state.gemini_llm_client_core.
-    # - Model name selection (using constants like OPENAI_LLM_MODEL_CORE)
-    # - System message handling (prepending for Gemini as discussed).
-    # - API calls and response parsing.
-    # - Error handling (RateLimitError, Gemini-specific errors, etc.).
-    logger.info(f"Core: LLM call to {provider_name} (FULL IMPLEMENTATION NEEDED). Prompt: {prompt_text_from_rag[:50]}...")
-    _log_to_ui_if_available(f"调用LLM: {provider_name} (核心逻辑待填充)...", "INFO", "CoreLLM")
-    return f"[ACTUAL LLM Output for {provider_name} WILL BE HERE]\nBased on: {prompt_text_from_rag[:70]}..."
+# In novel_core.py
 
+# Ensure all necessary constants like OPENAI_LLM_MODEL_CORE, GEMINI_LLM_MODEL_CORE,
+# DEEPSEEK_BASE_URL_CORE, CUSTOM_PROXY_BASE_URL_CORE, etc., are defined at the top.
+# Ensure helper functions like core_get_custom_proxy_key, core_set_temp_os_proxies,
+# core_restore_original_os_proxies, core_get_httpx_client_with_proxy are fully implemented.
+
+def core_generate_with_llm(provider_name: str, 
+                           prompt_text_from_rag: str, 
+                           temperature: float = 0.7, 
+                           max_tokens_override: Optional[int] = None, 
+                           system_message_override: Optional[str] = None) -> Optional[str]:
+    log_prefix = f"CoreLLM_{provider_name.upper()}"
+    _log_to_ui_if_available(f"开始调用LLM: {provider_name}...", module_prefix=log_prefix)
+    
+    max_tokens = max_tokens_override if max_tokens_override is not None else st.session_state.get('max_tokens_per_llm_call', 7800)
+    
+    # Retrieve API keys from st.session_state.api_keys fallback to os.getenv
+    # Example for OpenAI, you need to handle all providers
+    openai_api_key = st.session_state.get('api_keys', {}).get(OPENAI_API_KEY_ENV_NAME, os.getenv(OPENAI_API_KEY_ENV_NAME))
+    gemini_api_key = st.session_state.get('api_keys', {}).get(GEMINI_API_KEY_ENV_NAME, os.getenv(GEMINI_API_KEY_ENV_NAME))
+    deepseek_api_key = st.session_state.get('api_keys', {}).get(DEEPSEEK_API_KEY_ENV_NAME, os.getenv(DEEPSEEK_API_KEY_ENV_NAME))
+    # custom_proxy_key handled by core_get_custom_proxy_key()
+
+    # Determine proxies based on provider
+    http_proxy, https_proxy = None, None
+    if provider_name == "openai_official": http_proxy, https_proxy = OPENAI_OFFICIAL_HTTP_PROXY_CORE, OPENAI_OFFICIAL_HTTPS_PROXY_CORE
+    elif provider_name == "deepseek": http_proxy, https_proxy = DEEPSEEK_LLM_HTTP_PROXY_CORE, DEEPSEEK_LLM_HTTPS_PROXY_CORE
+    elif provider_name == "custom_proxy_llm": http_proxy, https_proxy = CUSTOM_LLM_HTTP_PROXY_CORE, CUSTOM_LLM_HTTPS_PROXY_CORE
+    elif provider_name == "gemini": http_proxy, https_proxy = GEMINI_HTTP_PROXY_CORE, GEMINI_HTTPS_PROXY_CORE # Gemini SDK uses these env vars
+    
+    core_set_temp_os_proxies(http_proxy, https_proxy) # Set proxies for the call
+    
+    default_system_message = "你是一位富有创意的小说作家助手，擅长撰写情节连贯、情感丰富、符合用户指令的中文网络小说。请严格遵循用户的具体指令进行创作。"
+    final_system_message = system_message_override if system_message_override else default_system_message
+    
+    generated_text: Optional[str] = None
+    temp_httpx_client_for_openai_sdk = None
+
+    try:
+        logger.info(f"{log_prefix}: Sending prompt (len: {len(prompt_text_from_rag)}) with max_tokens={max_tokens}, temp={temperature}")
+
+        if provider_name == "openai_official" or provider_name == "deepseek" or provider_name == "custom_proxy_llm":
+            # Manage OpenAI-compatible client (can be stored in session_state to reuse)
+            # For simplicity, creating new one or assuming st.session_state.llm_client is managed
+            current_openai_client = st.session_state.get('llm_client') # This would be an OpenAI() instance
+            # TODO: Robust client initialization/reuse logic for OpenAI, DeepSeek, CustomProxy
+            # Example:
+            # if not current_openai_client or st.session_state.get('current_openai_client_provider') != provider_name:
+            #     api_k, base_u, model_n = ... # Get specific config
+            #     temp_httpx_client_for_openai_sdk = core_get_httpx_client_with_proxy(os.environ.get("HTTP_PROXY"), os.environ.get("HTTPS_PROXY"))
+            #     current_openai_client = openai.OpenAI(api_key=api_k, base_url=base_u, http_client=temp_httpx_client_for_openai_sdk)
+            #     st.session_state.llm_client = current_openai_client
+            #     st.session_state.current_openai_client_provider = provider_name
+            # model_to_call = ... (OPENAI_LLM_MODEL_CORE, etc.)
+            # response = current_openai_client.chat.completions.create(...)
+            # generated_text = response.choices[0].message.content.strip()
+            generated_text = f"[{provider_name.upper()} MOCK] {prompt_text_from_rag[:100]}..." # Placeholder
+
+        elif provider_name == "gemini":
+            if not gemini_api_key: raise ValueError("Gemini API Key not found for core_generate_with_llm.")
+            
+            # Initialize Gemini client (can be stored in session_state)
+            gemini_client = st.session_state.get('gemini_llm_client_core')
+            if not gemini_client or st.session_state.get('current_gemini_client_provider') != provider_name : # Re-init if needed
+                 if not st.session_state.get('gemini_configured_core_sdk', False): # Configure only once
+                     genai.configure(api_key=gemini_api_key, client_options={"api_endpoint": os.getenv("GEMINI_API_ENDPOINT")})
+                     st.session_state.gemini_configured_core_sdk = True
+                 gemini_client = genai.GenerativeModel(
+                    GEMINI_LLM_MODEL_CORE, # Uses constant
+                    generation_config=genai.types.GenerationConfig(max_output_tokens=max_tokens, temperature=temperature)
+                 )
+                 st.session_state.gemini_llm_client_core = gemini_client
+                 st.session_state.current_gemini_client_provider = provider_name
+
+            prompt_with_sys_msg = f"{final_system_message}\n\n---\n\n{prompt_text_from_rag}"
+            safety_settings_val = [{"category": c, "threshold": "BLOCK_NONE"} for c in ["HARM_CATEGORY_HARASSMENT", "HARM_CATEGORY_HATE_SPEECH", "HARM_CATEGORY_SEXUALLY_EXPLICIT", "HARM_CATEGORY_DANGEROUS_CONTENT"]]
+            
+            logger.debug(f"{log_prefix}: Sending to Gemini. Prompt length: {len(prompt_with_sys_msg)}")
+            response = gemini_client.generate_content(prompt_with_sys_msg, safety_settings=safety_settings_val) # type: ignore
+            
+            # Robust response parsing for Gemini
+            if response.prompt_feedback and response.prompt_feedback.block_reason:
+                logger.warning(f"{log_prefix}: Gemini Prompt Blocked: {response.prompt_feedback.block_reason}")
+            elif response.candidates and response.candidates[0].content and response.candidates[0].content.parts:
+                generated_text = "".join(part.text for part in response.candidates[0].content.parts).strip()
+            elif hasattr(response, 'text') and response.text:
+                generated_text = response.text.strip()
+            else:
+                logger.warning(f"{log_prefix}: Gemini returned no parsable content.")
+        else:
+            raise ValueError(f"Unsupported LLM provider in core_generate_with_llm: {provider_name}")
+
+    except openai.RateLimitError as e_rate: 
+        logger.error(f"{log_prefix}: API Rate Limit: {e_rate}"); time.sleep(20); 
+        # Recursive call with retry (be careful with this in a web app, might need a different strategy)
+        # return core_generate_with_llm(provider_name, prompt_text_from_rag, temperature, max_tokens, system_message_override)
+        generated_text = f"错误：API速率限制。请稍后重试。({e_rate})"
+    except (genai.types.generation_types.BlockedPromptException, google_exceptions.RetryError, google_exceptions.ServiceUnavailable) as e_gem:
+        logger.error(f"{log_prefix}: Gemini API error: {e_gem}"); 
+        generated_text = f"错误：Gemini API遇到问题。({e_gem})"
+    except Exception as e:
+        logger.error(f"{log_prefix}: LLM call failed: {e}", exc_info=True)
+        generated_text = f"错误：调用LLM时发生未知错误。({e})"
+    finally:
+        if temp_httpx_client_for_openai_sdk: temp_httpx_client_for_openai_sdk.close()
+        core_restore_original_os_proxies()
+
+    if generated_text:
+        _log_to_ui_if_available(f"LLM成功生成文本，长度: {len(generated_text)}。", "DEBUG", log_prefix)
+    else:
+        _log_to_ui_if_available("LLM未能生成文本或返回空内容。", "WARNING", log_prefix)
+    return generated_text
 
 # --- Main Initialization Function (called by app_ui.py) ---
 def core_initialize_system(embedding_choice_key: str, llm_choice_key: str, api_keys_from_ui: dict):
@@ -304,57 +401,55 @@ def core_generate_segment_text_for_ui(user_directive: str) -> Optional[str]:
 
 # In novel_core.py
 def core_generate_segment_text_for_ui(user_directive: str) -> Optional[str]:
-    log_prefix = "CoreGenerateUI"
-    _log_to_ui_if_available(f"UI请求生成片段. 指令: {user_directive[:30]}...", module_prefix=log_prefix)
+    log_prefix = "CoreRAG"
+    _log_to_ui_if_available(f"开始RAG流程. 指令: {user_directive[:30]}...", module_prefix=log_prefix)
 
     if not st.session_state.get('system_initialized_successfully', False):
         _log_to_ui_if_available("错误: 系统未初始化，无法生成片段。", "ERROR", log_prefix)
-        return "错误: 系统未初始化。"
+        return "错误: 系统未初始化，请先在侧边栏初始化。"
 
     try:
         # 1. Retrieve relevant lore
-        # Use a query derived from the user directive
-        lore_query = f"与以下写作指令相关的核心设定、人物背景或世界观信息：'{user_directive[:100]}...'"
-        retrieved_lore_list = core_retrieve_relevant_lore(lore_query, n_results=st.session_state.get('num_lore_results_ui', 3)) # Get n_results from session_state if configurable
+        lore_query = f"与写作指令 '{user_directive[:100]}...' 相关的核心设定、人物背景或世界观信息"
+        # Get n_results from session_state if configurable by UI, else default
+        num_lore_to_fetch = st.session_state.get('num_lore_results_ui', 3) 
+        retrieved_lore_list = core_retrieve_relevant_lore(lore_query, n_results=num_lore_to_fetch) # Assumes this function is now fully implemented
         retrieved_lore_text = "\n\n---\n\n".join(retrieved_lore_list) if retrieved_lore_list else "当前指令无特定相关的背景知识补充。"
         _log_to_ui_if_available(f"检索到 {len(retrieved_lore_list)} 条知识片段。", "DEBUG", log_prefix)
 
         # 2. Retrieve recent story segments
-        num_recent_segments = st.session_state.get('num_recent_segments_to_fetch_ui', 2)
-        recent_segments_data = core_retrieve_recent_story_segments(n_results=num_recent_segments)
+        num_recent_to_fetch = st.session_state.get('num_recent_segments_to_fetch_ui', 2)
+        recent_segments_data = core_retrieve_recent_story_segments(n_results=num_recent_to_fetch) # Assumes this is fully implemented
         recent_story_text = "\n\n---\n\n".join(reversed(recent_segments_data)) if recent_segments_data and recent_segments_data[0] != "这是故事的开端，尚无先前的故事片段。" else "这是故事的开端。"
         _log_to_ui_if_available(f"检索到 {len(recent_segments_data) if recent_segments_data and recent_segments_data[0] != '这是故事的开端，尚无先前的故事片段。' else 0} 条最近故事片段。", "DEBUG", log_prefix)
         
-        # 3. Build contextual emotional bridge (from your original logic)
+        # 3. Build contextual emotional bridge (Example - adapt from your original logic)
         contextual_emotional_bridge = ""
-        # TODO: Implement your contextual_emotional_bridge logic here if needed, based on recent_story_text and user_directive
-        # Example:
-        # if "退婚" in recent_story_text: contextual_emotional_bridge = "**重要情境回顾**: 主角刚被退婚..."
-
+        if recent_story_text != "这是故事的开端。":
+            if any(k in recent_story_text.lower() for k in ["退婚", "羞辱", "悲伤", "愤怒"]):
+                contextual_emotional_bridge = "**重要情境回顾与情感指引**：\n角色可能刚经历了负面情绪事件（如退婚、羞辱）。请确保新内容在情感和逻辑上紧密承接先前情节的氛围。"
+        
         # 4. Construct the final prompt
-        # This structure should match what your LLM expects and what worked in novel_writing_assistant.py
         prompt_parts = [
-            f"写作风格参考：请以引人入胜的中文网络小说风格创作。目标是生成一段详细、连贯且符合后续情节发展的内容。如果用户要求章节名，请在生成内容的最开始以 '## 章节名：XXX' 的格式给出。", # System-like instruction
-            "---参考背景知识与设定（与当前场景指令相关）---", retrieved_lore_text,
+            # System-like instruction is now part of core_generate_with_llm's final_system_message
+            "---参考背景知识与设定（请结合这些信息进行创作）---", retrieved_lore_text,
             "---必须严格承接的先前故事情节（如果存在）---", recent_story_text,
             (contextual_emotional_bridge if contextual_emotional_bridge else ""),
             "---当前核心写作任务 (请严格从“先前故事情节”结尾处继续，并高度重视任何“情境回顾与情感指引”中的信息，以确保情节和情感的无缝衔接。请全力完成用户的具体写作指令。如果用户指令中包含对章节名、爽点、钩子、情感线、篇幅引导等创作要求，请尽力满足。)---",
             f"用户具体写作指令如下：\n{user_directive}",
-            "---请基于以上所有信息，直接开始撰写故事正文（不要重复指令或做额外解释）：---"
+            "---请基于以上所有信息，直接开始撰写故事正文（不要重复指令或做额外解释，直接输出小说内容）：---"
         ]
         final_prompt_for_llm = "\n\n".join(filter(None, prompt_parts))
         
         _log_to_ui_if_available(f"构建的最终Prompt长度: {len(final_prompt_for_llm)} chars.", "DEBUG", log_prefix)
-        # For very long prompts, consider logging only a snippet
-        # logger.debug(f"Final prompt for LLM (first 500 chars):\n{final_prompt_for_llm[:500]}")
+        logger.debug(f"Final prompt for LLM (first 300 chars):\n{final_prompt_for_llm[:300]}")
 
         # 5. Call LLM
-        generated_text = core_generate_with_llm(
+        generated_text = core_generate_with_llm( # Assumes this is fully implemented
             st.session_state.current_llm_provider,
             final_prompt_for_llm,
             temperature=st.session_state.get('llm_temperature', 0.7),
             max_tokens_override=st.session_state.get('max_tokens_per_llm_call')
-            # system_message_override can be used if core_generate_with_llm supports it differently than prepending
         )
         
         if generated_text:
@@ -367,3 +462,7 @@ def core_generate_segment_text_for_ui(user_directive: str) -> Optional[str]:
         logger.error(f"{log_prefix}: 生成片段时发生错误: {e}", exc_info=True)
         _log_to_ui_if_available(f"生成片段错误: {e}", "ERROR", log_prefix)
         return f"生成片段时发生内部错误: {str(e)[:200]}..."
+    
+
+
+    
