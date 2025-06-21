@@ -1,14 +1,11 @@
-# requirements.txt
-    streamlit
-    openai>=1.3.0
-    sentence-transformers
-    torch
-    transformers
-    pymilvus>=2.4.0
-    google-generativeai>=0.3.0 
-    google-api-core
-    grpcio # grpcio-status 是 grpcio 的一部分或依赖
-    protobuf>=5.26.1,<6.0 # <--- 添加或修改这行
-    httpx
-    python-dotenv
-    # ... 其他依赖 ...
+streamlit
+python-dotenv
+pymilvus>=2.4.0
+openai>=1.0.0
+sentence-transformers>=2.2.0
+torch
+transformers
+google-generativeai>=0.3.0 
+google-api-core
+httpx
+# Add any other direct dependencies your project has
