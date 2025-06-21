@@ -136,14 +136,34 @@ def core_init_milvus_collections_internal():
     log_to_ui_milvus(f"Story Collection目标名称: {story_col_name}")
 
 
-    # 3. Define Schemas
-    # TODO: PASTE YOUR FULL FieldSchema and CollectionSchema definitions HERE
-    # for lore_schema_list and story_schema_list.
-    # These depend on current_embedding_dimension.
-    lore_schema_list: List[FieldSchema] = [] # REPLACE WITH ACTUAL SCHEMA
-    story_schema_list: List[FieldSchema] = [] # REPLACE WITH ACTUAL SCHEMA
-    if not lore_schema_list or not story_schema_list: # Basic check for placeholders
-        logger.warning("Milvus Schemas are placeholders! Replace with actual definitions.")
+    # 3. Define Schemas (AFTER successful connection and name definition)
+    log_to_ui_milvus("定义Milvus集合Schema...")
+    pk_field = FieldSchema(name="doc_id", dtype=DataType.VARCHAR, is_primary=True, auto_id=False, max_length=64, description="Primary key")
+    embedding_field = FieldSchema(name="embedding", dtype=DataType.FLOAT_VECTOR, dim=current_embedding_dimension, description="Embedding vector")
+    text_content_field = FieldSchema(name="text_content", dtype=DataType.VARCHAR, max_length=65530, description="Text content of the document")
+    timestamp_field = FieldSchema(name="timestamp", dtype=DataType.VARCHAR, max_length=64, description="ISO format timestamp")
+    
+    # Fields specific to lore collection
+    lore_source_file_field = FieldSchema(name="source_file", dtype=DataType.VARCHAR, max_length=255, description="Source file of the lore")
+    lore_document_type_field = FieldSchema(name="document_type", dtype=DataType.VARCHAR, max_length=100, description="Type of lore document")
+    
+    # Fields specific to story collection
+    story_chapter_field = FieldSchema(name="chapter", dtype=DataType.VARCHAR, max_length=50, description="Chapter number or identifier")
+    story_segment_number_field = FieldSchema(name="segment_number", dtype=DataType.VARCHAR, max_length=50, description="Segment number within the chapter")
+    
+    base_schema_fields = [pk_field, embedding_field, text_content_field, timestamp_field]
+    
+    lore_schema_list: List[FieldSchema] = base_schema_fields + [lore_source_file_field, lore_document_type_field]
+    story_schema_list: List[FieldSchema] = base_schema_fields + [story_chapter_field, story_segment_number_field]
+    
+    if not lore_schema_list or not hasattr(lore_schema_list[0], 'name'):
+        err_msg_schema_lore = "Lore schema list is not correctly defined with FieldSchema objects."
+        logger.error(err_msg_schema_lore); log_to_ui_milvus(err_msg_schema_lore, "FATAL"); raise ValueError(err_msg_schema_lore)
+    if not story_schema_list or not hasattr(story_schema_list[0], 'name'):
+        err_msg_schema_story = "Story schema list is not correctly defined with FieldSchema objects."
+        logger.error(err_msg_schema_story); log_to_ui_milvus(err_msg_schema_story, "FATAL"); raise ValueError(err_msg_schema_story)
+    log_to_ui_milvus("Schema定义完成。")
+    logger.warning("Milvus Schemas are placeholders! Replace with actual definitions.")
     log_to_ui_milvus("Schema定义完成 (占位符 - 需替换)。")
 
 
